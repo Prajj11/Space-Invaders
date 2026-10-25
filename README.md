@@ -1,194 +1,166 @@
-# 👾 Space Invaders — AI Edition
+# Space Invaders — AI Guidance Edition
 
-> A faithful clone of the 1978 arcade classic, supercharged with an **AI Autopilot Engine** — built entirely in pure Python + pygame.
+A ten-level arcade campaign built entirely in **Python and pygame-ce**, with
+optional guidance from Hill Climbing, A*, BFS and DFS. You control movement and
+shooting; the algorithms suggest moves and explain their searches.
 
-![Python](https://img.shields.io/badge/Python-3.8%2B-3776AB?style=flat-square&logo=python&logoColor=white)
-![Pygame](https://img.shields.io/badge/pygame--ce-%3E%3D2.5-green?style=flat-square)
-![License](https://img.shields.io/badge/License-MIT-yellow?style=flat-square)
-![AI Algorithms](https://img.shields.io/badge/AI-Hill%20Climbing%20%7C%20A*%20%7C%20BFS%20%7C%20DFS-blueviolet?style=flat-square)
+Created for Artificial Intelligence coursework at **PCCE, Semester 5**.
 
----
+## Quick start
 
-## ✨ Overview
+Requires Python and pip. Tested with **Python 3.13**. All sprites, effects and audio
+are generated in Python; no external asset downloads are needed.
 
-This project implements the classic **Space Invaders** arcade game from scratch using only **Python** and **pygame-ce**. What makes it unique is the integrated **AI Autopilot Engine** (`ai_agent.py`) that lets four classic AI search algorithms play the game in real time — no pre-trained models, no ML frameworks, just pure algorithmic intelligence.
-
-**Key highlights:**
-- 🎨 Every sprite is **pixel art encoded as bitmaps in code** — zero image files
-- 🔊 Every sound effect is **synthesized at runtime** from raw PCM waveforms — zero audio files
-- 🤖 Four AI algorithms play live with **real-time telemetry HUD**
-- 🧱 Pixel-perfect destructible bunkers
-- 🛸 Full arcade loop with score, hi-score persistence, lives, waves, and UFO
-
----
-
-## 🚀 Getting Started
-
-### Prerequisites
-
-- Python 3.8 or higher
-- pip
-
-### Installation
+From the project directory:
 
 ```bash
-# Clone the repository
-git clone https://github.com/<your-username>/Space-Invaders.git
-cd Space-Invaders
-
-# Install dependencies
-pip install -r requirements.txt
-```
-
-### Run the game
-
-```bash
+python -m pip install -r requirements.txt
 python main.py
 ```
 
----
+For an isolated environment on Windows (PowerShell):
 
-## 🎮 Controls
-
-| Key | Action |
-|-----|--------|
-| `←` / `→` | Move the laser cannon (Manual mode) |
-| `SPACE` | Fire (one shot on screen, arcade style) |
-| `0` | Switch to **Manual** human control |
-| `1` | Switch to **Hill Climbing** AI Autopilot |
-| `2` | Switch to **A\* Search** AI Autopilot |
-| `3` | Switch to **BFS** AI Autopilot |
-| `4` | Switch to **DFS** AI Autopilot |
-| `TAB` | Cycle to next AI mode |
-| `V` | Toggle AI Debug Visualizer (rays & danger zones) |
-| `P` | Pause / resume |
-| `M` | Mute / unmute |
-| `ENTER` | Start game / play again |
-
----
-
-## 🤖 AI Autopilot Engine
-
-The game features an integrated **AI Autopilot Engine** (`ai_agent.py`) implementing four classic AI search algorithms that play the game in real time. Each algorithm inspects the live game state (player position, falling bombs, bunkers, invaders, UFO) and returns a move direction, shoot decision, and telemetry stats.
-
-### 1. 🏔️ Hill Climbing — Local Heuristic Search
-
-- Evaluates all immediate neighboring actions (`LEFT`, `STAY`, `RIGHT`) using a **multi-factor objective function**.
-- Scoring factors: bomb danger penalty, target alignment reward, shield cover bonus, wall avoidance.
-- **Greedy and fast** — O(b) per frame, always moves to the locally optimal position.
-- Best for: quick reactions with minimal compute overhead.
-
-### 2. ⭐ A\* Search — Informed Best-First Search
-
-- Explores action trajectories across a **multi-step time horizon** minimizing f(n) = g(n) + h(n).
-- g(n): Accumulated path cost — movement cost, direction jitter penalties, and threat costs.
-- h(n): Heuristic — estimated residual danger + horizontal distance to highest-priority target.
-- **Balances survivability with offensive alignment** — the most "intelligent" planner.
-- Best for: optimal play with a balance of survival and offense.
-
-### 3. 🔄 Breadth-First Search (BFS)
-
-- Explores moves **layer-by-layer** using a FIFO queue.
-- Guaranteed to find the **shallowest (shortest) action path** to a safe, target-aligned firing pocket.
-- Prunes branches that pass through lethal bomb zones.
-- Best for: guaranteed shortest path to a safe shooting position.
-
-### 4. 🌀 Depth-First Search (DFS)
-
-- Plunges deep into action branches up to a fixed horizon using a LIFO stack.
-- Rapidly validates **long-term survival paths** through falling bomb fields with backtracking on lethal branches.
-- Best for: fast exploration of long-horizon survival paths.
-
-### 📊 Telemetry HUD
-
-While any AI is active, the on-screen HUD displays:
-- Active algorithm name
-- Number of nodes expanded
-- Decision latency in milliseconds
-- Chosen action (`LEFT` / `STAY` / `RIGHT` + `SHOOT`)
-
-Press **V** to toggle the visual debug overlay showing danger rays and threat zones.
-
----
-
-## 🏗️ Project Structure
-
-```
-Space-Invaders/
-├── main.py          # Game engine: state machine, collisions, HUD, rendering
-├── ai_agent.py      # AI Autopilot: Hill Climbing, A* Search, BFS, DFS
-├── entities.py      # Player, InvaderGrid, Projectiles, Shields, UFO
-├── sprites.py       # All pixel art as in-code bitmaps → pygame.Surfaces
-├── sounds.py        # Procedural audio: PCM waveforms synthesized at startup
-├── settings.py      # All tunable constants (sizes, speeds, scoring, colors)
-├── test_smoke.py    # Headless smoke tests: full game loop + all AI agents
-├── requirements.txt
-└── README.md
+```powershell
+python -m venv .venv
+.venv\Scripts\python.exe -m pip install -r requirements.txt
+.venv\Scripts\python.exe main.py
 ```
 
-| File | Role |
-|------|------|
-| `main.py` | Core game engine — state machine, collision detection, HUD rendering, wave scaling |
-| `ai_agent.py` | AI Autopilot Engine — world model extraction, four search algorithms, telemetry |
-| `entities.py` | Game entities — `Player`, `InvaderGrid`, `Bullet`, `Bomb`, `Shield`, `UFO`, `Boom` |
-| `sprites.py` | Procedural pixel art — all sprites encoded as bitmaps, rasterized to `pygame.Surface` at startup |
-| `sounds.py` | Procedural audio — march bass, shoot SFX, explosion, UFO siren, synthesized from PCM waveforms |
-| `settings.py` | Central config — every tunable game constant (resolution, speeds, scoring, colors, file paths) |
-| `test_smoke.py` | Headless integration tests — real game loop with dummy drivers, simulates gameplay + verifies all AI agents |
+Press **ENTER** to start. Use **D** on the title screen to select Easy, Normal or
+Hard. Difficulty affects enemy movement, projectile speed, attack frequency and
+boss health.
 
----
+## Controls
 
-## 🎯 Game Features
+| Input | Action |
+| --- | --- |
+| Left / Right arrows | Move |
+| Hold SPACE | Fire |
+| SHIFT | Dash in the held or last movement direction; 3-second cooldown |
+| E | Clear active bombs and gain brief protection; charges reset each level |
+| P | Pause / resume |
+| M | Mute / unmute |
+| 1 / 2 / 3 / 4 | Select Hill Climbing / A* / BFS / DFS guidance |
+| TAB | Cycle guidance modes |
+| V / 0 | Hide or show guidance / turn guidance off |
+| Left-click an enemy or boss | Prioritize that target for guidance |
+| Right-click or left-click empty space | Clear the selected target |
+| C | Open the algorithm lab during play or pause |
+| ENTER | Start or restart a run |
+| ESC on game-over or victory screen | Return to the title screen |
 
-- **5×11 Invader Formation** — squid / crab / octopus sprites marching side-to-side, dropping at edges, **speeding up as numbers thin**, with the four-note bass march synced to each step.
-- **Destructible Bunkers** — bombs and bullets carve **pixel-level holes**; bunker sprites are destroyed by literally erasing their pixels.
-- **Invader Bombing** — bombs aimed at the player's column with increasing frequency per wave.
-- **Mystery UFO** — crosses the top of the screen for 50–300 points with a siren sound effect.
-- **Full Arcade Loop** — score display, hi-score persistence (`.hiscore`), lives with cannon icons, bonus cannon at 1500 points, wave scaling, wave-clear fanfare, start / pause / game-over screens, and lose condition.
-- **Player Respawn** — blinking invulnerability frames after death, cannon explosion animation.
+Between levels, use **Left / Right** to choose an upgrade and **ENTER** to continue.
+The lab has its own controls, listed below.
 
----
+## Campaign
 
-## 🧪 Testing
+| Level | Name | Challenge |
+| --- | --- | --- |
+| 1 | First Contact | Clear the basic formation |
+| 2 | Scout Patrol | Fight cyan scouts that weave across the formation |
+| 3 | Iron Guard | Defeat two-hit armored enemies and warning-lane bombers |
+| 4 | Meteor Run | Survive 35 seconds of meteor strikes |
+| 5 | Sentinel | Defeat the first boss |
+| 6 | Counterattack | Face scouts and armored guards together |
+| 7 | Bombardment | Break through bombers and armored guards |
+| 8 | Last Fleet | Clear a formation with all three special enemy types |
+| 9 | Storm Passage | Survive 45 seconds of faster meteor strikes |
+| 10 | Overlord | Defeat the final boss to complete the campaign |
+
+Bosses have three attack phases, visible health bars and a glowing gold core that
+takes double damage. Red lanes warn of scheduled attacks. Destroying a bomber
+before it fires cancels its warning. Meteors and bombs can be shot down.
+
+You lose when you run out of lives or the invaders reach your ship's row.
+Destructible bunkers provide cover, but both friendly and enemy shots damage them.
+Each cleared level awards bonus points.
+
+### Pickups and upgrades
+
+- **R pickup:** eight seconds of rapid fire, with up to four simultaneous shots.
+- **S pickup:** protection against a bomb hit; shield ranks increase its capacity.
+- **Combos:** kill again within 2.5 seconds to keep the chain alive. The multiplier
+  rises every three kills, up to 4x. Losing a life resets the combo and rapid fire.
+- **Emergency pulse:** starts with one charge per level; clears existing bombs,
+  while already scheduled warning attacks can still fire afterward.
+
+After levels 1–9, choose one upgrade:
+
+| Upgrade | Benefit per rank |
+| --- | --- |
+| Weapon | One extra normal shot on screen and a shorter firing cooldown |
+| Shield | One additional hit of protection at the start of each level |
+| Pulse | One additional pulse charge per level |
+
+Each upgrade caps at rank 3. Choosing a capped upgrade restores one life, up to six.
+Upgrade ranks last for the current run. Temporary pickups and combos reset between
+levels. **Only the high score is saved** in `.hiscore`; new runs start at level 1.
+
+## Algorithm guidance
+
+| Algorithm | Method | On-screen advice |
+| --- | --- | --- |
+| Hill Climbing | Compare the current position with its immediate neighbors | A nearby position with lower predicted bomb risk, or hold advice |
+| A* | Prioritize states using elapsed steps plus estimated remaining distance | A horizontal route toward target alignment |
+| BFS | Explore states layer by layer using a queue | The shallowest reachable position predicted safe to hold briefly |
+| DFS | Explore a branch using a stack, then backtrack as needed | A possible six-step movement sequence |
+
+The colored track shows suggested horizontal positions. **L**, **R** and **-** mean
+left, right and wait. The dotted A* line indicates target alignment, not vertical
+flight. The HUD reports the suggested action, search size and calculation time.
+
+Guides refresh approximately every 0.12 seconds. A* and BFS search up to 28 steps
+with a 1,600-node limit; DFS searches six steps. One planned step represents 24
+pixels over 0.075 seconds. Searches use current bombs, bunker pixels and scheduled
+warning lanes. Future attacks or moving targets can invalidate advice; partial
+and unavailable routes are labeled explicitly.
+
+### Algorithm lab
+
+Press **C** to freeze the game and compare all four algorithms on the same
+situation. The table shows each suggestion, nodes examined, calculation time and
+route length.
+
+| Key | Lab action |
+| --- | --- |
+| 1–4 | Inspect an algorithm |
+| N | Reveal the next search expansion or evaluation |
+| A | Reveal the full search and selected route |
+| R | Reset the search replay |
+| C / ESC | Return to the previous playing or paused state |
+
+The plot uses ship position horizontally and future step vertically. Gray points
+are explored states, yellow marks the latest state, and green shows the chosen
+route once the replay finishes. This replays a completed search; it does not
+advance gameplay. Timing comparisons measure local computation, not playing
+ability—the algorithms solve different objectives.
+
+## Project files
+
+| File | Purpose |
+| --- | --- |
+| `main.py` | Game loop, controls, collisions, progression and HUD |
+| `campaign.py` | Level definitions, difficulty settings and bosses |
+| `entities.py` | Player, invaders, projectiles, bunkers and UFO |
+| `ai_agent.py` | World model, four guidance algorithms and search traces |
+| `comparison.py` | Frozen comparison lab and search replay |
+| `effects.py` | Starfield, particles and supply pickups |
+| `sprites.py` / `sounds.py` | Code-generated pixel art and synthesized audio |
+| `settings.py` | Display, movement, scoring and other gameplay constants |
+| `requirements.txt` | Runtime dependency: `pygame-ce>=2.5` |
+| `test_*.py` | Headless regression and smoke tests |
+
+## Tests
 
 ```bash
+python -m unittest test_campaign.py test_guidance.py test_combat.py
 python test_smoke.py
 ```
 
-Runs the real game loop with dummy video/audio SDL drivers (no window required), simulates:
-- A full gameplay session with kills, wave progression, and player death
-- All four AI agents (Hill Climbing, A\*, BFS, DFS) making decisions
-- Core game rule verification (scoring, lives, wave transitions)
+Tests use dummy video and audio drivers, so no game window is required. They cover
+campaign progression, bosses, combat upgrades, manual control, guidance, the lab
+and rendering. Test saves are isolated from the player's high score.
 
 ---
 
-## 📋 Requirements
-
-```
-pygame-ce>=2.5
-```
-
-```bash
-pip install -r requirements.txt
-```
-
----
-
-## 🎓 Academic Context
-
-This project was developed as part of the **Artificial Intelligence (Sem 5)** coursework at **PCCE**, demonstrating the application of classical AI search algorithms in a real-time interactive environment:
-
-- **Uninformed Search**: BFS & DFS for game-tree exploration
-- **Informed Search**: A\* with domain-specific heuristics
-- **Local Search**: Hill Climbing for greedy optimization
-- **Real-time Constraints**: Each algorithm must return a decision within a single game frame (~16ms at 60 FPS)
-
----
-
-## 📄 License
-
-This project is licensed under the MIT License.
-
----
-
-<p align="center">Made with ❤️ and 👾 | PCCE — AI Sem 5</p>
+The previous README is preserved in [docs/archive/README.previous.md](docs/archive/README.previous.md).

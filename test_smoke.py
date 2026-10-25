@@ -5,6 +5,8 @@ Run:  python test_smoke.py
 """
 
 import os
+import tempfile
+from unittest.mock import patch
 
 # Must be set before pygame initializes anything.
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
@@ -25,7 +27,8 @@ def check(name, cond):
         FAILURES.append(name)
 
 
-def main():
+def _run_checks():
+    FAILURES.clear()
     game = game_mod.Game()
     dt = 1.0 / 60.0
 
@@ -96,8 +99,7 @@ def main():
         a.alive = False
     game.update(dt)
     check("wave pause entered", game.state == game_mod.STATE_WAVE_PAUSE)
-    game.wave_pause_timer = 0.01
-    game.update(dt)
+    game.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_RETURN))
     check("next wave starts", game.state == game_mod.STATE_PLAYING
           and game.wave == 2)
     check("grid repopulated", game.grid.alive_count == 55)
@@ -143,15 +145,15 @@ def main():
         game.draw()
     check("draws in every state", True)
 
-    # --- AI Autopilot agent checks ----------------------------------------
+    # --- Algorithm guidance agent checks ----------------------------------------
     for mode_idx, mode_name in [(1, "Hill Climbing"), (2, "A* Search"),
                                  (3, "BFS"), (4, "DFS")]:
         game.ai_mode = mode_idx
         game.state = game_mod.STATE_PLAYING
-        # Simulate several ticks under AI control
+        # Simulate several ticks with manual control and guidance
         for _ in range(30):
             game.update(dt)
-        check(f"{mode_name} agent runs and produces telemetry",
+        check(f"{mode_name} guide runs and produces telemetry",
               bool(game.ai_telemetry and "nodes" in game.ai_telemetry))
         check(f"{mode_name} player stays within boundaries",
               MIN_X <= game.player.rect.x <= MAX_X)
@@ -177,6 +179,12 @@ def main():
         print("%d FAILURE(S): %s" % (len(FAILURES), ", ".join(FAILURES)))
         raise SystemExit(1)
     print("ALL CHECKS PASSED")
+
+
+def main():
+    with tempfile.TemporaryDirectory() as folder:
+        with patch.object(game_mod, "HI_SCORE_FILE", os.path.join(folder, ".hiscore")):
+            _run_checks()
 
 
 if __name__ == "__main__":

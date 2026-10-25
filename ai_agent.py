@@ -1,23 +1,12 @@
+"""Read-only movement guidance using four classical search algorithms.
+
+Plans are horizontal positions over time, not vertical flight paths. Predictions
+use current bombs and bunker pixels; future enemy fire is unknown.
 """
-AI Autopilot Agents for Space Invaders.
-
-Implements four foundational search algorithms for game playing:
-1. Hill Climbing  — Local heuristic search (greedy evaluation of immediate moves)
-2. A* Search      — Informed heuristic search (optimal path planning minimizing f = g + h)
-3. BFS            — Breadth-First Search (shallowest-path layer-by-layer exploration)
-4. DFS            — Depth-First Search (deep-horizon survival path check with backtracking)
-
-Each agent inspects the game state (player, falling bombs, bunkers, invaders, UFO)
-and returns:
-  - move_dir: -1 (LEFT), 0 (STAY), +1 (RIGHT)
-  - shoot: bool (whether to fire)
-  - telemetry: dict of performance stats (nodes expanded, search depth, compute time)
-"""
-
 import collections
 import heapq
 import time
-from typing import Dict, List, Optional, Tuple
+from typing import Dict
 
 from settings import (
     BOMB_SPEED,
@@ -26,14 +15,12 @@ from settings import (
     PLAYER_SPEED,
     PLAYER_Y,
     SHIELD_Y,
-    WIDTH,
 )
 
 # Discrete simulation parameters for planning
 MOVE_STEP_PX = 24       # Horizontal movement per discrete search step
 SEARCH_HORIZON = 6      # Lookahead steps (approx 0.45 - 0.5s horizon)
-DANGER_MARGIN = 26      # Horizontal proximity to a falling bomb considered dangerous
-TARGET_ALIGN_TOL = 12   # Pixel tolerance to trigger firing at target
+TARGET_ALIGN_TOL = 12   # Horizontal tolerance for suggested target alignment
 
 
 # -----------------------------------------------------------------------------
@@ -47,18 +34,19 @@ def get_world_model(game) -> Dict:
     player_w = game.player.rect.w
 
     # Calculate actual falling bomb speed for current wave
-    bomb_speed = BOMB_SPEED * (1.0 + 0.08 * (game.wave - 1))
+    bomb_speed = game._bomb_speed()
 
     # Extract falling bombs: (bomb_center_x, time_to_reach_player_y, is_shielded)
     bombs = []
     for b in game.bombs:
         dist_y = PLAYER_Y - b.rect.bottom
         if dist_y > 0:
-            time_to_hit = dist_y / max(1.0, bomb_speed)
+            time_to_hit = dist_y / max(1.0, bomb_speed * b.speed_scale)
             # Check if this bomb will hit an intact bunker shield first
             shielded = False
             for shield in game.shields:
-                if shield.rect.left <= b.rect.centerx <= shield.rect.right:
+                if (b.rect.bottom <= shield.rect.top
+                        and shield.rect.left <= b.rect.centerx <= shield.rect.right):
                     # Check if the shield has opaque pixels in this column
                     ox = b.rect.centerx - shield.rect.x
                     if 0 <= ox < shield.w and shield._opaque_in(ox - 4, 0, ox + 4, shield.h):
@@ -70,6 +58,15 @@ def get_world_model(game) -> Dict:
                 "time_to_hit": time_to_hit,
                 "shielded": shielded,
             })
+
+    # Include telegraphed attacks that are already scheduled.
+    for warning in getattr(game, "warnings", []):
+        source = warning["source"]
+        if source is not None and not source.alive:
+            continue
+        travel = max(0, PLAYER_Y - warning["y"]) / (bomb_speed * warning["speed_scale"])
+        bombs.append({"x": warning["x"], "y": warning["y"],
+                      "time_to_hit": warning["timer"] + travel, "shielded": False})
 
     # Extract candidate targets: UFO takes highest priority, followed by lowest aliens
     targets = []
@@ -100,6 +97,14 @@ def get_world_model(game) -> Dict:
             "kind": lowest.kind,
         })
 
+    if getattr(game, "boss", None):
+        targets.append({"x": game.boss.core.centerx, "y": game.boss.rect.bottom,
+                        "priority": 700.0, "kind": "boss"})
+    selected = getattr(game, "selected_target", None)
+    if selected is not None and getattr(selected, "alive", True):
+        targets.insert(0, {"x": selected.rect.centerx, "y": selected.rect.bottom,
+                           "priority": 1000.0, "kind": "selected"})
+
     # Sort targets descending by priority
     targets.sort(key=lambda t: t["priority"], reverse=True)
 
@@ -111,39 +116,12 @@ def get_world_model(game) -> Dict:
     return {
         "player_x": player_x,
         "player_w": player_w,
-        "can_shoot": game.player.can_shoot() and len(game.bullets) == 0,
+        "can_shoot": game.player.can_shoot() and len(game.bullets) < (4 if game.rapid_timer > 0 else 1),
         "bombs": bombs,
         "targets": targets,
         "shield_spans": shield_spans,
         "shields": game.shields,
     }
-
-
-def is_in_danger(x: float, step: int, bombs: List[Dict], dt_step: float = 0.08) -> float:
-    """
-    Computes danger penalty at position x at future step k.
-    Returns 0.0 if safe, or a positive threat penalty.
-    """
-    future_time = step * dt_step
-    threat = 0.0
-    for b in bombs:
-        # Time remaining until this bomb reaches the player's cannon row
-        t_hit = b["time_to_hit"]
-        # If the bomb hits around this time step
-        if abs(t_hit - future_time) < 0.18:
-            dist = abs(x - b["x"])
-            if dist < DANGER_MARGIN:
-                if b["shielded"]:
-                    threat += 40.0 / (1.0 + dist)
-                else:
-                    # Lethal threat from unshielded bomb
-                    threat += 1000.0 / (1.0 + dist)
-        # Spatial danger: bomb is already close vertically
-        elif t_hit < future_time and abs(t_hit - future_time) < 0.35:
-            dist = abs(x - b["x"])
-            if dist < DANGER_MARGIN and not b["shielded"]:
-                threat += 500.0 / (1.0 + dist)
-    return threat
 
 
 def is_shield_blocking(x: float, shields) -> bool:
@@ -156,401 +134,164 @@ def is_shield_blocking(x: float, shields) -> bool:
     return False
 
 
-def clamp_x(x: float) -> float:
-    """Ensures player position stays within playfield walls."""
-    return max(MIN_X + 16, min(MAX_X - 16, x))
+STEP_SECONDS = MOVE_STEP_PX / PLAYER_SPEED
+PLAN_DEPTH = 28
+NODE_LIMIT = 1600
 
 
-# -----------------------------------------------------------------------------
-# Base Agent Class
-# -----------------------------------------------------------------------------
+def bounded(x, world):
+    left_half = world["player_w"] // 2
+    right_half = world["player_w"] - left_half
+    return max(MIN_X + left_half, min(MAX_X - right_half, x))
+
+
+def risk(x, seconds, world):
+    """Conservative collision window, including cannon and bomb widths."""
+    return sum(1 for b in world["bombs"] if not b["shielded"]
+               and abs(b["time_to_hit"] - seconds) < .18
+               and abs(b["x"] - x) < world["player_w"] / 2 + 8)
+
+
+def safe_transition(x, nx, step, world):
+    # Sample along the move, so crossing a bomb lane is checked too.
+    return all(not risk(x + (nx - x) * fraction,
+                        (step + fraction) * STEP_SECONDS, world)
+               for fraction in (.25, .5, .75, 1))
+
+
+def safe_to_hold(x, step, world):
+    return all(not risk(x, step * STEP_SECONDS + i * .075, world)
+               for i in range(9))
+
+
 class BaseAgent:
-    name: str = "Base Agent"
-    short_name: str = "BASE"
+    """Computes suggestions only. Never changes game state or input."""
+    def decide(self, game):
+        return self.analyze(get_world_model(game))
 
-    def decide(self, game) -> Tuple[int, bool, Dict]:
-        """
-        Returns (move_dir, should_shoot, telemetry_dict).
-        move_dir: -1 (left), 0 (stay), 1 (right)
-        should_shoot: True or False
-        """
-        raise NotImplementedError
+    def analyze(self, world):
+        started = time.perf_counter()
+        world = dict(world)
+        world["trace"] = []
+        path, nodes, status = self.plan(world)
+        positions = [world["player_x"]]
+        for action in path:
+            positions.append(bounded(positions[-1] + action * MOVE_STEP_PX, world))
+        direction = path[0] if path else 0
+        return direction, False, {
+            "nodes": nodes, "depth": len(path), "path": path,
+            "trace": world["trace"],
+            "positions": positions, "target": world["targets"][0] if world["targets"] else None,
+            "bombs": world["bombs"], "status": status,
+            "time_ms": (time.perf_counter() - started) * 1000,
+            "action": "NONE" if status.startswith("No ") else {-1: "LEFT", 0: "HOLD", 1: "RIGHT"}[direction],
+        }
 
 
-# -----------------------------------------------------------------------------
-# 1. Hill Climbing Agent (Local Heuristic Search)
-# -----------------------------------------------------------------------------
 class HillClimbingAgent(BaseAgent):
-    """
-    Hill Climbing: Greedy local search.
-    Evaluates immediate neighbors {LEFT, STAY, RIGHT} using a heuristic evaluation
-    function and climbs toward the local state with the highest score.
-    """
-    name: str = "Hill Climbing (Local Search)"
-    short_name: str = "HILL CLIMB"
-
-    def evaluate_state(self, x: float, world: Dict) -> float:
-        score = 0.0
-
-        # 1. Safety from bombs (major penalty for danger)
-        threat = is_in_danger(x, 1, world["bombs"])
-        score -= threat * 2.5
-
-        # 2. Target alignment bonus
-        if world["targets"]:
-            primary = world["targets"][0]
-            dist_to_target = abs(x - primary["x"])
-            # Alignment reward
-            if dist_to_target <= TARGET_ALIGN_TOL:
-                score += 250.0
-            else:
-                score -= dist_to_target * 0.85
-
-        # 3. Shield cover bonus during heavy bomb rain
-        if world["bombs"]:
-            for left, right in world["shield_spans"]:
-                if left <= x <= right:
-                    score += 15.0
-
-        # 4. Wall avoidance penalty (avoid getting cornered)
-        if x <= MIN_X + 30 or x >= MAX_X - 30:
-            score -= 40.0
-
-        return score
-
-    def decide(self, game) -> Tuple[int, bool, Dict]:
-        t0 = time.perf_counter()
-        world = get_world_model(game)
-        cur_x = world["player_x"]
-
-        # Neighbors: STAY, LEFT, RIGHT
-        actions = [
-            (0, clamp_x(cur_x)),
-            (-1, clamp_x(cur_x - MOVE_STEP_PX)),
-            (1, clamp_x(cur_x + MOVE_STEP_PX)),
-        ]
-
-        best_score = -float("inf")
-        best_dir = 0
-        nodes_evaluated = 0
-
-        for move_dir, nx in actions:
-            nodes_evaluated += 1
-            score = self.evaluate_state(nx, world)
-            if score > best_score:
-                best_score = score
-                best_dir = move_dir
-
-        # Decide whether to shoot
-        should_shoot = False
-        if world["can_shoot"] and world["targets"]:
-            primary = world["targets"][0]
-            if abs(cur_x - primary["x"]) <= TARGET_ALIGN_TOL + 4:
-                # Shoot if unobstructed or if target is below shield
-                if not is_shield_blocking(cur_x, world["shields"]) or primary["y"] > SHIELD_Y:
-                    should_shoot = True
-
-        elapsed_ms = (time.perf_counter() - t0) * 1000.0
-        telemetry = {
-            "algorithm": self.name,
-            "nodes": nodes_evaluated,
-            "depth": 1,
-            "time_ms": elapsed_ms,
-            "eval_score": round(best_score, 1),
-            "action": "LEFT" if best_dir == -1 else ("RIGHT" if best_dir == 1 else "STAY"),
-        }
-        return best_dir, should_shoot, telemetry
+    def plan(self, world):
+        x = world["player_x"]
+        def cost(nx):
+            return sum(risk(nx, i * .075, world) for i in range(9)) + sum(
+                1 / (1 + abs(nx - b["x"])) for b in world["bombs"]
+                if not b["shielded"] and 0 <= b["time_to_hit"] <= .6)
+        world.setdefault("trace", []).append((x, 0))
+        current = cost(x)
+        best, best_cost = 0, current
+        for move in (-1, 1):
+            nx = bounded(x + move * MOVE_STEP_PX, world)
+            world["trace"].append((nx, 1))
+            value = cost(nx)
+            if safe_transition(x, nx, 0, world) and value < best_cost:
+                best, best_cost = move, value
+        status = "Safer nearby position" if best else (
+            "Hold: no nearby threat" if current == 0 else "No safer neighbor found")
+        return [best], 3, status
 
 
-# -----------------------------------------------------------------------------
-# 2. A* Search Agent (Optimal Informed Heuristic Search)
-# -----------------------------------------------------------------------------
 class AStarAgent(BaseAgent):
-    """
-    A* Search: Finds the optimal trajectory over a time horizon by minimizing:
-      f(n) = g(n) + h(n)
-    where:
-      g(n) = path cost (movement effort + accumulated danger along path)
-      h(n) = heuristic estimate (danger risk + distance to optimal target alignment)
-    """
-    name: str = "A* Search (Informed Search)"
-    short_name: str = "A* SEARCH"
-
-    def heuristic(self, x: float, step: int, world: Dict) -> float:
-        h = 0.0
-        # Danger heuristic
-        threat = is_in_danger(x, step, world["bombs"])
-        h += threat * 3.0
-
-        # Distance to best target alignment
-        if world["targets"]:
-            primary = world["targets"][0]
-            dist = abs(x - primary["x"])
-            h += (dist / float(WIDTH)) * 120.0
-            if dist > TARGET_ALIGN_TOL:
-                h += 30.0
-
-        # Penalty for wall proximity
-        if x <= MIN_X + 25 or x >= MAX_X - 25:
-            h += 35.0
-
-        return h
-
-    def decide(self, game) -> Tuple[int, bool, Dict]:
-        t0 = time.perf_counter()
-        world = get_world_model(game)
-        start_x = world["player_x"]
-
-        # Priority queue entries: (f, g, counter, current_x, step, path)
-        open_set = []
-        counter = 0
-
-        h0 = self.heuristic(start_x, 0, world)
-        heapq.heappush(open_set, (h0, 0.0, counter, start_x, 0, []))
-
-        best_path = []
-        best_leaf_f = float("inf")
-        nodes_expanded = 0
+    def plan(self, world):
+        if not world["targets"]:
+            return [], 0, "No target available"
+        target = world["targets"][0]
+        def heuristic(x):
+            return max(0, abs(x - target["x"]) - TARGET_ALIGN_TOL) / MOVE_STEP_PX
+        start = world["player_x"]
+        queue = [(heuristic(start), 0, start, [])]
         visited = set()
-
-        while open_set and nodes_expanded < 75:
-            f, g, _, cx, step, path = heapq.heappop(open_set)
-            nodes_expanded += 1
-
-            state_key = (round(cx / 10.0), step)
-            if state_key in visited:
+        nodes = 0
+        partial, closest = [], heuristic(start)
+        while queue and nodes < NODE_LIMIT:
+            _, step, x, path = heapq.heappop(queue)
+            key = (x, step)
+            if key in visited:
                 continue
-            visited.add(state_key)
-
-            # Horizon reached
-            if step >= SEARCH_HORIZON:
-                if f < best_leaf_f:
-                    best_leaf_f = f
-                    best_path = path
-                break
-
-            # Expand successors: STAY, LEFT, RIGHT
-            for move_dir in (0, -1, 1):
-                nx = clamp_x(cx + move_dir * MOVE_STEP_PX)
-                threat = is_in_danger(nx, step + 1, world["bombs"])
-
-                # Prune instantly lethal transitions
-                if threat >= 900.0:
-                    continue
-
-                # Transition cost: step penalty + danger cost + direction switch cost
-                step_cost = 4.0 + threat * 2.0
-                if path and path[-1] != move_dir:
-                    step_cost += 2.0  # Encourage smooth motion
-
-                new_g = g + step_cost
-                new_h = self.heuristic(nx, step + 1, world)
-                new_f = new_g + new_h
-
-                counter += 1
-                heapq.heappush(open_set, (new_f, new_g, counter, nx, step + 1, path + [move_dir]))
-
-        # Extract first action of planned path
-        chosen_dir = best_path[0] if best_path else 0
-
-        # Shooting logic
-        should_shoot = False
-        if world["can_shoot"] and world["targets"]:
-            primary = world["targets"][0]
-            if abs(start_x - primary["x"]) <= TARGET_ALIGN_TOL + 4:
-                if not is_shield_blocking(start_x, world["shields"]) or primary["y"] > SHIELD_Y:
-                    should_shoot = True
-
-        elapsed_ms = (time.perf_counter() - t0) * 1000.0
-        telemetry = {
-            "algorithm": self.name,
-            "nodes": nodes_expanded,
-            "depth": len(best_path) if best_path else SEARCH_HORIZON,
-            "time_ms": elapsed_ms,
-            "eval_score": round(best_leaf_f, 1) if best_leaf_f != float("inf") else 0.0,
-            "action": "LEFT" if chosen_dir == -1 else ("RIGHT" if chosen_dir == 1 else "STAY"),
-        }
-        return chosen_dir, should_shoot, telemetry
+            visited.add(key)
+            nodes += 1
+            world.setdefault("trace", []).append((x, step))
+            h = heuristic(x)
+            if h < closest:
+                closest, partial = h, path
+            if h == 0 and safe_to_hold(x, step, world):
+                blocked = target["y"] <= SHIELD_Y and is_shield_blocking(x, world["shields"])
+                return path, nodes, "Target aligned; bunker blocks shot" if blocked else "Route to target alignment"
+            if step >= PLAN_DEPTH:
+                continue
+            for move in (0, -1, 1):
+                nx = bounded(x + move * MOVE_STEP_PX, world)
+                if safe_transition(x, nx, step, world):
+                    heapq.heappush(queue, (step + 1 + heuristic(nx), step + 1, nx, path + [move]))
+        return partial, nodes, "Partial route only" if partial else "No route found within search limit"
 
 
-# -----------------------------------------------------------------------------
-# 3. Breadth-First Search Agent (BFS - Shortest-Path Exploration)
-# -----------------------------------------------------------------------------
 class BFSAgent(BaseAgent):
-    """
-    Breadth-First Search (BFS): Explores moves layer-by-layer up to horizon D.
-    Guarantees finding the shallowest, shortest sequence of moves to a safe
-    shooting corridor while avoiding bomb paths.
-    """
-    name: str = "Breadth-First Search (BFS)"
-    short_name: str = "BFS"
-
-    def decide(self, game) -> Tuple[int, bool, Dict]:
-        t0 = time.perf_counter()
-        world = get_world_model(game)
-        start_x = world["player_x"]
-
-        # Queue items: (current_x, step, path)
-        queue = collections.deque([(start_x, 0, [])])
+    def plan(self, world):
+        queue = collections.deque([(world["player_x"], 0, [])])
         visited = set()
-
-        nodes_expanded = 0
-        best_path = []
-        safest_leaf_path = []
-        min_danger = float("inf")
-
-        while queue and nodes_expanded < 120:
-            cx, step, path = queue.popleft()
-            nodes_expanded += 1
-
-            state_key = (round(cx / 12.0), step)
-            if state_key in visited:
+        nodes = 0
+        while queue and nodes < NODE_LIMIT:
+            x, step, path = queue.popleft()
+            if (x, step) in visited:
                 continue
-            visited.add(state_key)
-
-            threat = is_in_danger(cx, step, world["bombs"])
-
-            # Goal check: Safe state aligned with high-priority target
-            if world["targets"]:
-                primary = world["targets"][0]
-                if abs(cx - primary["x"]) <= TARGET_ALIGN_TOL and threat == 0.0 and step > 0:
-                    best_path = path
-                    break
-
-            # Track safest leaf if explicit goal not met early
-            if step >= SEARCH_HORIZON:
-                total_threat = threat
-                if world["targets"]:
-                    total_threat += abs(cx - world["targets"][0]["x"]) * 0.5
-                if total_threat < min_danger:
-                    min_danger = total_threat
-                    safest_leaf_path = path
+            visited.add((x, step))
+            nodes += 1
+            world.setdefault("trace", []).append((x, step))
+            if safe_to_hold(x, step, world):
+                return path, nodes, "Nearest safe position" if path else "Current position is safe"
+            if step >= PLAN_DEPTH:
                 continue
-
-            # Branch out: STAY, LEFT, RIGHT
-            for move_dir in (0, -1, 1):
-                nx = clamp_x(cx + move_dir * MOVE_STEP_PX)
-                next_threat = is_in_danger(nx, step + 1, world["bombs"])
-                if next_threat < 900.0:  # Prune lethal branches
-                    queue.append((nx, step + 1, path + [move_dir]))
-
-        chosen_path = best_path or safest_leaf_path
-        chosen_dir = chosen_path[0] if chosen_path else 0
-
-        # Shooting logic
-        should_shoot = False
-        if world["can_shoot"] and world["targets"]:
-            primary = world["targets"][0]
-            if abs(start_x - primary["x"]) <= TARGET_ALIGN_TOL + 4:
-                if not is_shield_blocking(start_x, world["shields"]) or primary["y"] > SHIELD_Y:
-                    should_shoot = True
-
-        elapsed_ms = (time.perf_counter() - t0) * 1000.0
-        telemetry = {
-            "algorithm": self.name,
-            "nodes": nodes_expanded,
-            "depth": len(chosen_path) if chosen_path else SEARCH_HORIZON,
-            "time_ms": elapsed_ms,
-            "eval_score": round(min_danger, 1) if min_danger != float("inf") else 0.0,
-            "action": "LEFT" if chosen_dir == -1 else ("RIGHT" if chosen_dir == 1 else "STAY"),
-        }
-        return chosen_dir, should_shoot, telemetry
+            for move in (0, -1, 1):
+                nx = bounded(x + move * MOVE_STEP_PX, world)
+                if safe_transition(x, nx, step, world):
+                    queue.append((nx, step + 1, path + [move]))
+        return [], nodes, "No safe position found within search limit"
 
 
-# -----------------------------------------------------------------------------
-# 4. Depth-First Search Agent (DFS - Deep Survival Path Exploration)
-# -----------------------------------------------------------------------------
 class DFSAgent(BaseAgent):
-    """
-    Depth-First Search (DFS): Explores deep movement paths up to horizon D
-    before backtracking. Rapidly checks if a survival path exists under heavy bombing.
-    """
-    name: str = "Depth-First Search (DFS)"
-    short_name: str = "DFS"
-
-    def decide(self, game) -> Tuple[int, bool, Dict]:
-        t0 = time.perf_counter()
-        world = get_world_model(game)
-        start_x = world["player_x"]
-
-        # Stack items: (current_x, step, path)
-        stack = [(start_x, 0, [])]
+    def plan(self, world):
+        stack = [(world["player_x"], 0, [])]
         visited = set()
-
-        nodes_expanded = 0
-        backtracks = 0
-        surviving_path = []
-
-        # Order moves biased toward target to avoid pathological DFS wandering
-        bias_dir = 0
-        if world["targets"]:
-            tx = world["targets"][0]["x"]
-            if tx > start_x + 10:
-                bias_dir = 1
-            elif tx < start_x - 10:
-                bias_dir = -1
-
-        # Move ordering for stack (pushed in reverse of desired pop order)
-        move_order = [bias_dir, 0, -bias_dir if bias_dir != 0 else -1]
-        # Remove duplicates while preserving order
-        ordered_moves = []
-        for m in move_order:
-            if m not in ordered_moves:
-                ordered_moves.append(m)
-
-        while stack and nodes_expanded < 100:
-            cx, step, path = stack.pop()
-            nodes_expanded += 1
-
-            state_key = (round(cx / 14.0), step)
-            if state_key in visited:
+        nodes = 0
+        while stack and nodes < NODE_LIMIT:
+            x, step, path = stack.pop()
+            if (x, step) in visited:
                 continue
-            visited.add(state_key)
-
-            threat = is_in_danger(cx, step, world["bombs"])
-            if threat >= 900.0:
-                backtracks += 1
-                continue
-
-            # Target alignment goal or maximum search depth reached safely
+            visited.add((x, step))
+            nodes += 1
+            world.setdefault("trace", []).append((x, step))
             if step >= SEARCH_HORIZON:
-                surviving_path = path
-                break
-
-            # Push successors onto LIFO stack
-            for move_dir in reversed(ordered_moves):
-                nx = clamp_x(cx + move_dir * MOVE_STEP_PX)
-                next_threat = is_in_danger(nx, step + 1, world["bombs"])
-                if next_threat < 900.0:
-                    stack.append((nx, step + 1, path + [move_dir]))
-
-        chosen_dir = surviving_path[0] if surviving_path else 0
-
-        # Shooting logic
-        should_shoot = False
-        if world["can_shoot"] and world["targets"]:
-            primary = world["targets"][0]
-            if abs(start_x - primary["x"]) <= TARGET_ALIGN_TOL + 4:
-                if not is_shield_blocking(start_x, world["shields"]) or primary["y"] > SHIELD_Y:
-                    should_shoot = True
-
-        elapsed_ms = (time.perf_counter() - t0) * 1000.0
-        telemetry = {
-            "algorithm": self.name,
-            "nodes": nodes_expanded,
-            "depth": len(surviving_path) if surviving_path else SEARCH_HORIZON,
-            "time_ms": elapsed_ms,
-            "backtracks": backtracks,
-            "action": "LEFT" if chosen_dir == -1 else ("RIGHT" if chosen_dir == 1 else "STAY"),
-        }
-        return chosen_dir, should_shoot, telemetry
+                return path, nodes, "Possible move sequence"
+            target_x = world["targets"][0]["x"] if world["targets"] else x
+            moves = sorted((0, -1, 1), key=lambda m: abs(x + m * MOVE_STEP_PX - target_x))
+            for move in reversed(moves):
+                nx = bounded(x + move * MOVE_STEP_PX, world)
+                if safe_transition(x, nx, step, world):
+                    stack.append((nx, step + 1, path + [move]))
+        return [], nodes, "No sequence found within search limit"
 
 
-# -----------------------------------------------------------------------------
-# Agent Registry & Factory
-# -----------------------------------------------------------------------------
 AGENTS = {
-    0: ("Manual (Human)", None),
+    0: ("Guidance off", None),
     1: ("Hill Climbing", HillClimbingAgent()),
     2: ("A* Search", AStarAgent()),
     3: ("BFS", BFSAgent()),

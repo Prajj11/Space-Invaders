@@ -6,6 +6,7 @@ per frame would otherwise be truncated away (UFO glide, bullet speed).
 """
 
 import random
+import math
 
 import pygame
 
@@ -100,6 +101,8 @@ class Alien:
         self.col = col
         self.points = SCORES[kind]
         self.alive = True
+        self.role = "standard"
+        self.hp = 1
         self.rect = pygame.Rect(0, 0, 0, 0)
 
 
@@ -111,6 +114,8 @@ class InvaderGrid:
         self.sprites = sprites
         self.on_step = on_step
         self.frame = 0
+        self.motion_time = 0.0
+        self.speed_scale = 1.0
         self.timer = 0.0
         self.step_count = 0
         self.direction = 1
@@ -139,9 +144,11 @@ class InvaderGrid:
                 continue
             w = a.rect.w
             a.rect.topleft = (
-                int(self.x + a.col * X_STEP + (X_STEP - w) / 2),
+                int(self.x + a.col * X_STEP + (X_STEP - w) / 2
+                    + (10 * math.sin(self.motion_time * 6 + a.col) if a.role == "scout" else 0)),
                 int(self.y + a.row * Y_STEP),
             )
+            a.rect.x = max(MIN_X, min(MAX_X - a.rect.w, a.rect.x))
 
     # -- state helpers ----------------------------------------------------------
     @property
@@ -185,7 +192,9 @@ class InvaderGrid:
 
     # -- simulation -------------------------------------------------------------
     def update(self, dt):
-        self.timer += dt
+        self.motion_time += dt
+        self._layout()
+        self.timer += dt * self.speed_scale
         # Guard the loop so a huge dt can't march the grid dozens of times.
         for _ in range(6):
             if self.timer < self.interval:
@@ -240,18 +249,27 @@ class Bomb:
     Like the bullet, movement is engine-owned (sub-stepped per frame).
     """
 
-    def __init__(self, x, y, sprites):
+    def __init__(self, x, y, sprites, speed_scale=1.0, meteor=False):
+        self.meteor_image = None
+        if meteor:
+            self.meteor_image = pygame.Surface((18, 28), pygame.SRCALPHA)
+            pygame.draw.polygon(self.meteor_image, (255, 155, 65), [(9, 0), (2, 18), (16, 18)])
+            pygame.draw.circle(self.meteor_image, (195, 105, 65), (9, 19), 8)
+            pygame.draw.circle(self.meteor_image, (255, 205, 120), (7, 17), 3)
+        self.speed_scale = speed_scale
         self.frames = sprites.bomb
-        self.rect = self.frames[0].get_rect(midtop=(x, y))
+        self.rect = (self.meteor_image or self.frames[0]).get_rect(midtop=(x, y))
         self._anim = 0.0
+        self.y = float(self.rect.y)
 
     def advance(self, px):
         self._anim += px / 14.0
-        self.rect.y += px
+        self.y += px
+        self.rect.y = round(self.y)
 
     @property
     def image(self):
-        return self.frames[int(self._anim) % 2]
+        return self.meteor_image if self.meteor_image is not None else self.frames[int(self._anim) % 2]
 
 
 class UFO:
